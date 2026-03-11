@@ -83,7 +83,7 @@ model = joblib.load("fraud_model.pkl")
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/yourusername/fraud-detection-ml.git
+git clone https://github.com/Jaywestty/Fraud-detection-ML.git
 cd fraud-detection-ml
 ```
 
