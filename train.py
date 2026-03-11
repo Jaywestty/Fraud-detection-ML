@@ -46,7 +46,7 @@ CAT_COLS = [
 
 def main():
     # Load dataset
-    df = pd.read_csv("nova_pay_transcations.csv")  # ensure this file is in the same folder
+    df = pd.read_csv("nova_pay_transcations.csv") 
 
     # Feature Engineering
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
