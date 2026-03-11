@@ -3,3 +3,4 @@ pandas>=2.2.0
 numpy>=2.1.0
 scikit-learn>=1.5.0
 joblib>=1.4.0
+imbalanced-learn==1.11.1
