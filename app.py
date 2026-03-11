@@ -1,50 +1,67 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import joblib
 from pathlib import Path
 
+# Page Config
+st.set_page_config(page_title="Fraud Detection Pro", page_icon="🛡️", layout="centered")
+
 # Load trained model
 MODEL_PATH = Path("models/fraud_model_20260311_164054.pkl")
-model = joblib.load(MODEL_PATH)
 
-st.title("Fraud Detection App")
-st.write("Enter transaction details to predict fraud (Yes/No).")
+@st.cache_resource
+def load_model():
+    return joblib.load(MODEL_PATH)
 
-# Dropdown options
-HOME_COUNTRIES = ['US', 'CA', 'UK', 'unknown']
-SOURCE_CURRENCIES = ['USD', 'CAD', 'GBP']
-DEST_CURRENCIES = ['CAD', 'MXN', 'CNY', 'EUR', 'INR', 'GBP', 'PHP', 'NGN', 'USD']
-CHANNELS = ['web', 'mobile', 'ATM']
-KYC_TIERS = ['low', 'standard', 'enhanced']
+model = load_model()
 
-# Numeric inputs
-amount_usd = st.number_input("Amount (USD)", 0.0, 1_000_000.0, 100.0)
-fee = st.number_input("Fee", 0.0, 1000.0, 0.0)
-exchange_rate_src_to_dest = st.number_input("Exchange Rate (Src -> Dest)", 0.0, 1000.0, 1.0)
-ip_risk_score = st.number_input("IP Risk Score", 0.0, 1.0, 0.0)
-account_age_days = st.number_input("Account Age (Days)", 0, 3650, 30)
-device_trust_score = st.number_input("Device Trust Score", 0.0, 1.0, 0.5)
-chargeback_history_count = st.number_input("Customer Chargebacks", 0, 100, 0)
-risk_score_internal = st.number_input("Internal Risk Score", 0.0, 1.0, 0.0)
-txn_velocity_1h = st.number_input("Transactions last 1h", 0, 1000, 0)
-txn_velocity_24h = st.number_input("Transactions last 24h", 0, 10_000, 0)
-corridor_risk = st.number_input("Corridor Risk", 0.0, 1.0, 0.0)
+# Header
+st.title("🛡️ Fraud Detection Analysis")
+st.markdown("---")
 
-# Dropdowns for categorical
-home_country = st.selectbox("Customer Home Country", HOME_COUNTRIES)
-source_currency = st.selectbox("Source Currency", SOURCE_CURRENCIES)
-dest_currency = st.selectbox("Destination Currency", DEST_CURRENCIES)
-channel = st.selectbox("Transaction Channel", CHANNELS)
-kyc_tier = st.selectbox("KYC Tier", KYC_TIERS)
-new_device = st.selectbox("New Device?", ["No", "Yes"])
-location_mismatch = st.selectbox("Location Mismatch?", ["No", "Yes"])
+# --- INPUT SECTION ---
+col1, col2 = st.columns(2)
 
-# Convert Yes/No to 0/1
+with col1:
+    st.subheader("💰 Transaction")
+    amount_usd = st.number_input("Amount (USD)", 0.0, 1_000_000.0, 100.0)
+    source_currency = st.selectbox("Source Currency", ['USD', 'CAD', 'GBP'])
+    dest_currency = st.selectbox("Destination Currency", ['CAD', 'MXN', 'CNY', 'EUR', 'INR', 'GBP', 'PHP', 'NGN', 'USD'])
+    channel = st.selectbox("Channel", ['web', 'mobile', 'ATM'])
+    fee = st.number_input("Transaction Fee", 0.0, 1000.0, 0.0)
+
+with col2:
+    st.subheader("👤 Customer")
+    home_country = st.selectbox("Home Country", ['US', 'CA', 'UK', 'unknown'])
+    kyc_tier = st.selectbox("KYC Tier", ['low', 'standard', 'enhanced'])
+    account_age_days = st.number_input("Account Age (Days)", 0, 3650, 30)
+    chargeback_history_count = st.number_input("Prev. Chargebacks", 0, 100, 0)
+    # Using horizontal radio for better UX
+    new_device = st.radio("New Device?", ["No", "Yes"], horizontal=True)
+    location_mismatch = st.radio("Location Mismatch?", ["No", "Yes"], horizontal=True)
+
+st.markdown("---")
+
+# Risk Scores Section
+st.subheader("📊 Risk & Velocity Metrics")
+r_col1, r_col2 = st.columns(2)
+
+with r_col1:
+    ip_risk_score = st.slider("IP Risk Score", 0.0, 1.0, 0.0)
+    device_trust_score = st.slider("Device Trust Score", 0.0, 1.0, 0.5)
+    risk_score_internal = st.slider("Internal Risk Score", 0.0, 1.0, 0.0)
+
+with r_col2:
+    corridor_risk = st.slider("Corridor Risk", 0.0, 1.0, 0.0)
+    txn_velocity_1h = st.number_input("Transactions (Last 1h)", 0, 1000, 0)
+    txn_velocity_24h = st.number_input("Transactions (Last 24h)", 0, 10_000, 0)
+
+# Fixed logic variables (not displayed to user to keep UI clean)
+exchange_rate_src_to_dest = 1.0 
 new_device_flag = 1 if new_device == "Yes" else 0
 location_mismatch_flag = 1 if location_mismatch == "Yes" else 0
 
-# Build input dataframe
+# Build Dataframe
 input_df = pd.DataFrame([{
     "amount_usd": amount_usd,
     "fee": fee,
@@ -66,7 +83,7 @@ input_df = pd.DataFrame([{
     "location_mismatch": location_mismatch_flag
 }])
 
-# Feature Engineering
+# Feature Engineering (Preserving all logic)
 input_df["cross_border"] = (input_df["home_country"] != "US").astype(int)
 input_df["device_risk"] = ((input_df["new_device"] == 1) & (input_df["device_trust_score"] < 0.5)).astype(int)
 input_df["velocity_ratio"] = input_df["txn_velocity_1h"] / (input_df["txn_velocity_24h"] + 1)
@@ -81,23 +98,23 @@ input_df["risk_pile_up"] = (
     input_df["device_risk"]
 )
 
-# Fill missing model columns
+# Align with model
 MODEL_COLUMNS = model.named_steps["preprocessor"].transformers_[0][2] + model.named_steps["preprocessor"].transformers_[1][2]
 for col in MODEL_COLUMNS:
     if col not in input_df.columns:
         input_df[col] = 0
 
-# Prediction
-if st.button("Predict Fraud"):
-    pred = model.predict(input_df)[0]  
-    prob = model.predict_proba(input_df)[0, 1]  
+# --- PREDICTION ---
+st.markdown("---")
+if st.button("Run Fraud Analysis", use_container_width=True, type="primary"):
+    pred = model.predict(input_df)[0]
+    prob = model.predict_proba(input_df)[0, 1]
 
     if pred == 1:
-        label = "Yes"
-        message = f"⚠️ This transaction is likely fraudulent. Be cautious! (Probability: {prob:.2%})"
+        st.error(f"### 🚩 Prediction: FRAUD DETECTED")
+        st.metric("Fraud Probability", f"{prob:.2%}")
+        st.write("This transaction matches high-risk fraud patterns.")
     else:
-        label = "No"
-        message = f"✅ This transaction seems safe. (Probability of fraud: {prob:.2%})"
-
-    st.subheader(f"Fraud Prediction: {label}")
-    st.write(message)
+        st.success(f"### ✅ Prediction: CLEAR")
+        st.metric("Fraud Probability", f"{prob:.2%}")
+        st.write("This transaction appears legitimate.")
