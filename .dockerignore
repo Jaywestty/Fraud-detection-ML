@@ -1,5 +1,8 @@
 __pycache__
 *.pyc
-*.pkl
 *.log
 .env
+mlruns/
+data/
+.vscode/
+.git
