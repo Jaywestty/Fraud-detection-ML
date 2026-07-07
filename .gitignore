@@ -61,7 +61,6 @@ mlruns/606791097581892253/models/m-4a18186fd6914c0e9dd2f647ff9c4f2b/params/best_
 .gitignore
 mlruns/606791097581892253/models/m-4a18186fd6914c0e9dd2f647ff9c4f2b/tags/mlflow.user
 .gitignore
-models/fraud_model_20260408_143707.pkl
 src/__pycache__/models.cpython-310.pyc
 src/__pycache__/pipeline.cpython-310.pyc
 src/__pycache__/features.cpython-310.pyc
@@ -75,7 +74,6 @@ mlruns/606791097581892253/models/m-4a18186fd6914c0e9dd2f647ff9c4f2b/metrics/Rand
 .gitignore
 mlruns/606791097581892253/models/m-4a18186fd6914c0e9dd2f647ff9c4f2b/artifacts/conda.yaml
 .gitignore
-models/best_model.pkl
 mlruns/606791097581892253/models/m-4a18186fd6914c0e9dd2f647ff9c4f2b/metrics/XGBoost_pr_auc
 mlruns/606791097581892253/models/m-4a18186fd6914c0e9dd2f647ff9c4f2b/metrics/LogisticRegression_pr_auc
 .gitignore
