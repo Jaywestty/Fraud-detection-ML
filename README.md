@@ -1,3 +1,13 @@
+---
+title: Fraud Detection API
+emoji: 🔍
+colorFrom: blue
+colorTo: red
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
 # 🔍 Fraud Detection ML App
 
 A machine learning-powered web application that predicts whether a financial transaction is fraudulent — built with Scikit-learn and deployed via Streamlit.
