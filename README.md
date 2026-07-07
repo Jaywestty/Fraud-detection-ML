@@ -12,7 +12,7 @@ pinned: false
 
 An end-to-end fraud detection system that scores financial transactions in real time, built to demonstrate a production-style MLOps workflow: experiment tracking, model serving, and a user-facing interface, deployed as three connected services.
 
-Live prediction interface (Streamlit): [add your Streamlit Cloud URL here]
+Live prediction interface (Streamlit): https://fraud-detect-mll.streamlit.app
 Live API and model dashboard (FastAPI on Hugging Face Spaces): https://jayywestty-frauddetection-ml.hf.space
 Model performance dashboard: https://jayywestty-frauddetection-ml.hf.space/dashboard
 
