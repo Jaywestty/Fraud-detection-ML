@@ -3,12 +3,15 @@ from pydantic import BaseModel
 import pandas as pd
 import joblib
 from pathlib import Path
+from fastapi.responses import HTMLResponse
+import json
 
 app = FastAPI(title="Fraud Detection API")
 
 # Absolute path for model
 PROJECT_DIR = Path(__file__).parent.parent.resolve()
 MODEL_PATH = PROJECT_DIR / "models" / "best_model.pkl"
+METRICS_PATH = PROJECT_DIR / "models" / "best_run_metrics.json"
 model = joblib.load(MODEL_PATH)
 
 # --- Input Schema ---
@@ -77,3 +80,45 @@ def predict(data: TransactionInput):
     proba = model.predict_proba(df)[0, 1]
     prediction = int(proba >= 0.5)
     return {"fraud_probability": float(proba), "prediction": prediction}
+
+@app.get("/model-info")
+def model_info():
+    if not METRICS_PATH.exists():
+        return {"error": "No training metrics found. Run main.py to generate a training report."}
+    with open(METRICS_PATH) as f:
+        return json.load(f)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    if not METRICS_PATH.exists():
+        return "<h2>No training metrics found. Run main.py to generate a report.</h2>"
+
+    with open(METRICS_PATH) as f:
+        report = json.load(f)
+
+    rows = ""
+    for name, m in report["models"].items():
+        highlight = "background-color:#e6ffe6;" if name == report["best_model"] else ""
+        rows += f"""
+        <tr style="{highlight}">
+            <td>{name}</td>
+            <td>{m['pr_auc']:.4f}</td>
+            <td>{m['best_threshold']:.4f}</td>
+        </tr>"""
+
+    html = f"""
+    <html>
+    <head><title>Fraud Detection Model Dashboard</title></head>
+    <body style="font-family:sans-serif; padding:2rem;">
+        <h1>Fraud Detection Model Dashboard</h1>
+        <p>Best model: <strong>{report['best_model']}</strong> (PR-AUC: {report['best_pr_auc']:.4f})</p>
+        <p>Last trained: {report['trained_at']}</p>
+        <table border="1" cellpadding="8" cellspacing="0">
+            <tr><th>Model</th><th>PR-AUC</th><th>Best Threshold</th></tr>
+            {rows}
+        </table>
+    </body>
+    </html>
+    """
+    return html
