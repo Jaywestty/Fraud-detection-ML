@@ -1,0 +1,19 @@
+{
+  "best_model": "LogisticRegression",
+  "best_pr_auc": 0.06747585318035393,
+  "trained_at": "20260707_113853",
+  "models": {
+    "LogisticRegression": {
+      "pr_auc": 0.06747585318035393,
+      "best_threshold": 0.8223388332660703
+    },
+    "RandomForest": {
+      "pr_auc": 0.024899541570089438,
+      "best_threshold": 0.03
+    },
+    "XGBoost": {
+      "pr_auc": 0.03476622754266133,
+      "best_threshold": 0.013827461749315262
+    }
+  }
+}

@@ -3,6 +3,7 @@ import joblib
 from pathlib import Path
 from datetime import datetime
 
+import json
 import mlflow
 import mlflow.sklearn
 from sklearn.model_selection import train_test_split
@@ -47,6 +48,8 @@ def main():
     best_name = ""
 
     # Start MLflow run
+    all_model_metrics = {}
+
     with mlflow.start_run():
         for name, classifier in candidate_models.items():
             print(f"\nTraining {name}...")
@@ -57,18 +60,20 @@ def main():
             print(f"{name} PR-AUC: {metrics['pr_auc']:.4f}")
             mlflow.log_metric(f"{name}_pr_auc", metrics["pr_auc"])
 
-            # Track best model
+            all_model_metrics[name] = {
+                "pr_auc": float(metrics["pr_auc"]),
+                "best_threshold": float(metrics["best_threshold"])
+            }
+
             if metrics["pr_auc"] > best_score:
                 best_score = metrics["pr_auc"]
                 best_model = pipeline
                 best_name = name
 
-        # Log best model info
         print(f"\nBest model: {best_name} with PR-AUC = {best_score:.4f}")
         mlflow.log_param("best_model", best_name)
         mlflow.sklearn.log_model(best_model, "best_model")
 
-        # Save best model locally
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         versioned_model_path = MODELS_DIR / f"fraud_model_{timestamp}.pkl"
         prod_model_path = MODELS_DIR / "best_model.pkl"
@@ -79,6 +84,17 @@ def main():
         print(f"Saved versioned model to {versioned_model_path}")
         print(f"Saved production model to {prod_model_path}")
 
+        metrics_report = {
+            "best_model": best_name,
+            "best_pr_auc": float(best_score),
+            "trained_at": timestamp,
+            "models": all_model_metrics
+        }
+        metrics_path = MODELS_DIR / "best_run_metrics.json"
+        with open(metrics_path, "w") as f:
+            json.dump(metrics_report, f, indent=2)
+
+        print(f"Saved run metrics to {metrics_path}")
 
 if __name__ == "__main__":
     main()
