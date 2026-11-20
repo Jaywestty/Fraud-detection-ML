@@ -2,7 +2,12 @@ __pycache__
 *.pyc
 *.log
 .env
+.venv/
 mlruns/
 data/
+notebooks/
+*.ipynb
+tests/
+streamlit_app/
 .vscode/
 .git
