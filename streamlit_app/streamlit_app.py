@@ -1,194 +1,266 @@
-import streamlit as st
-import requests
 import os
-from datetime import datetime
-import plotly.graph_objects as go
+from datetime import datetime, time, timezone
 
+import plotly.graph_objects as go
+import requests
+import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
-API_URL = os.getenv("API_URL")
-MODEL_INFO_URL = API_URL.rsplit("/predict", 1)[0] + "/model-info"
+
+# Must match src/schema.py (tests/test_api.py enforces this). Kept as a copy so
+# the Streamlit Cloud deploy doesn't need the training code or its dependencies.
+COUNTRIES = ["US", "UK", "CA"]
+SOURCE_CURRENCIES = ["USD", "GBP", "CAD"]
+DEST_CURRENCIES = ["USD", "CAD", "GBP", "EUR", "MXN", "NGN", "INR", "PHP", "CNY"]
+CHANNELS = ["mobile", "web", "atm"]
+KYC_TIERS = ["low", "standard", "enhanced"]
+
+PRESETS = {
+    "Typical customer": dict(
+        amount_usd=150.0, fee=3.3, source_currency="USD", dest_currency="CAD", channel="mobile",
+        home_country="US", ip_country="US", kyc_tier="standard", account_age_days=420,
+        chargeback_history_count=0, new_device=False, location_mismatch=False,
+        ip_risk_score=0.25, device_trust_score=0.85, risk_score_internal=0.20,
+        corridor_risk=0.0, txn_velocity_1h=0, txn_velocity_24h=1, txn_hour=14,
+    ),
+    "Suspicious pattern": dict(
+        amount_usd=2400.0, fee=12.0, source_currency="GBP", dest_currency="NGN", channel="web",
+        home_country="UK", ip_country="US", kyc_tier="low", account_age_days=12,
+        chargeback_history_count=1, new_device=True, location_mismatch=True,
+        ip_risk_score=0.85, device_trust_score=0.15, risk_score_internal=0.50,
+        corridor_risk=0.25, txn_velocity_1h=5, txn_velocity_24h=7, txn_hour=3,
+    ),
+}
 
 
-def format_trained_at(raw_timestamp):
+def get_api_base() -> str | None:
+    url = os.getenv("API_URL")
+    if not url:
+        try:
+            url = st.secrets.get("API_URL")
+        except Exception:
+            url = None
+    if not url:
+        return None
+    url = url.rstrip("/")
+    return url[: -len("/predict")] if url.endswith("/predict") else url
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_json(url: str):
+    r = requests.get(url, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def apply_preset():
+    for key, value in PRESETS[st.session_state.preset].items():
+        st.session_state[key] = value
+
+
+def gauge(proba: float, threshold: float) -> go.Figure:
+    top = max(0.25, min(1.0, threshold * 4, proba * 1.25))
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=proba * 100,
+        number={"suffix": "%", "valueformat": ".1f"},
+        gauge={
+            "axis": {"range": [0, top * 100], "ticksuffix": "%"},
+            "bar": {"color": "#1f2937"},
+            "steps": [
+                {"range": [0, threshold * 50], "color": "#d1fae5"},
+                {"range": [threshold * 50, threshold * 100], "color": "#fef3c7"},
+                {"range": [threshold * 100, top * 100], "color": "#fee2e2"},
+            ],
+            "threshold": {"line": {"color": "#dc2626", "width": 3}, "value": threshold * 100},
+        },
+    ))
+    fig.update_layout(height=230, margin=dict(t=20, b=0, l=30, r=30))
+    return fig
+
+
+def input_signals(p: dict) -> list[str]:
+    """Plain-language red flags present in the input (not a model explanation)."""
+    s = []
+    if p["new_device"] and p["device_trust_score"] < 0.5:
+        s.append("New device with low trust score")
+    elif p["new_device"]:
+        s.append("New device")
+    if p["location_mismatch"]:
+        s.append("Location differs from the account's usual location")
+    if p.get("ip_country") and p["ip_country"] != p["home_country"]:
+        s.append(f"IP country ({p['ip_country']}) differs from home country ({p['home_country']})")
+    if p["account_age_days"] < 60:
+        s.append(f"Young account ({p['account_age_days']} days)")
+    if p["txn_velocity_1h"] >= 2:
+        s.append(f"{p['txn_velocity_1h']} transactions in the last hour")
+    if p["ip_risk_score"] >= 0.7:
+        s.append("High-risk IP address")
+    if p["chargeback_history_count"] > 0:
+        s.append("Previous chargebacks")
+    if p["kyc_tier"] == "low":
+        s.append("Low KYC verification tier")
+    return s
+
+
+st.set_page_config(page_title="Fraud Detection", page_icon="🔍", layout="wide")
+
+api_base = get_api_base()
+if not api_base:
+    st.error("`API_URL` is not set. Add it to a `.env` file or Streamlit secrets, e.g. "
+             "`API_URL=http://127.0.0.1:8000`.")
+    st.stop()
+
+for key, value in PRESETS["Typical customer"].items():
+    st.session_state.setdefault(key, value)
+
+# ---------------- Sidebar: service + model card ----------------
+with st.sidebar:
+    st.header("Model")
     try:
-        parsed = datetime.strptime(raw_timestamp, "%Y%m%d_%H%M%S")
-        return parsed.strftime("%B %d, %Y at %I:%M %p")
-    except (ValueError, TypeError):
-        return raw_timestamp
+        health = fetch_json(f"{api_base}/health")
+        st.success(f"API online · model `{health.get('model_version')}`")
+    except requests.RequestException:
+        health = None
+        st.error("API unreachable. It may be waking up; retry in a minute.")
 
-
-st.set_page_config(page_title="Fraud Detection", layout="centered")
-
-st.title("Fraud Detection")
-st.write(
-    "This app checks a financial transaction for fraud risk in real time. "
-    "A trained classifier scores the transaction and returns a fraud probability. "
-    "Predictions are served by a FastAPI backend hosted on Hugging Face Spaces."
-)
-
-with st.expander("Model performance dashboard", expanded=False):
+    info = None
     try:
-        info_response = requests.get(MODEL_INFO_URL, timeout=10)
-        info_response.raise_for_status()
-        info = info_response.json()
+        info = fetch_json(f"{api_base}/model-info")
+    except requests.RequestException:
+        pass
 
-        if "error" in info:
-            st.warning(info["error"])
-        else:
-            col1, col2, col3 = st.columns(3)
-            metric_style = "font-size:1rem; font-weight:600; margin-top:2px;"
+    if info and "error" not in info:
+        test = info.get("test", {})
+        st.metric("Selected model", info["best_model"])
+        c1, c2 = st.columns(2)
+        c1.metric("Test PR-AUC", f"{info['best_pr_auc']:.3f}")
+        c2.metric("Base rate", f"{test.get('base_rate', 0):.2%}")
+        ci = test.get("pr_auc_ci_95")
+        if ci:
+            st.caption(f"95% CI for PR-AUC: {ci[0]:.3f}–{ci[1]:.3f} "
+                       f"({test.get('n_fraud', '?')} fraud cases in the test period).")
+        if "recall_at_top_5pct" in test:
+            st.caption(f"Reviewing the riskiest 5% of transactions catches "
+                       f"**{test['recall_at_top_5pct']:.0%}** of fraud in the test period.")
+        st.caption(f"Alert threshold: {info.get('threshold', 0.5):.1%}")
+    st.divider()
+    st.markdown(f"[API docs]({api_base}/docs) · [Dashboard]({api_base}/dashboard)")
 
-            col1.markdown(f"**Best Model**<div style='{metric_style}'>{info['best_model']}</div>", unsafe_allow_html=True)
-            col2.markdown(f"**Best PR-AUC**<div style='{metric_style}'>{info['best_pr_auc']:.4f}</div>", unsafe_allow_html=True)
-            col3.markdown(f"**Last Trained**<div style='{metric_style}'>{format_trained_at(info['trained_at'])}</div>", unsafe_allow_html=True)
+# ---------------- Main ----------------
+st.title("🔍 Transaction fraud check")
+st.write("Score a single transaction with the deployed model. Start from a preset, adjust any field, "
+         "then run the check.")
 
-            model_names = list(info["models"].keys())
-            pr_auc_values = [info["models"][m]["pr_auc"] for m in model_names]
-            colors = [
-                "#2ecc71" if m == info["best_model"] else "#3498db"
-                for m in model_names
-            ]
-
-            fig = go.Figure(
-                data=[
-                    go.Bar(
-                        x=model_names,
-                        y=pr_auc_values,
-                        marker_color=colors,
-                        text=[f"{v:.4f}" for v in pr_auc_values],
-                        textposition="outside"
-                    )
-                ]
-            )
-            fig.update_layout(
-                title="PR-AUC by Model",
-                yaxis_title="PR-AUC",
-                showlegend=False,
-                height=280,
-                margin=dict(t=40, b=20, l=20, r=20)
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-    except requests.exceptions.RequestException as e:
-        st.warning(f"Could not load model metrics: {e}")
-
-st.divider()
-st.subheader("Transaction details")
-st.caption("Enter the transaction information below. Hover the (?) icons for field guidance.")
+st.radio("Start from a preset", list(PRESETS), key="preset", horizontal=True, on_change=apply_preset)
 
 with st.form("transaction_form"):
-    col1, col2 = st.columns(2)
+    tx, acct = st.columns(2, gap="large")
+    dev, risk = st.columns(2, gap="large")
 
-    with col1:
-        amount_usd = st.number_input(
-            "Amount (USD)", min_value=0.0, value=100.0,
-            help="Total value of the transaction in US dollars."
-        )
-        fee = st.number_input(
-            "Fee", min_value=0.0, value=1.0,
-            help="Transaction fee charged, in US dollars."
-        )
-        source_currency = st.text_input(
-            "Source Currency", value="USD",
-            help="Currency the sender is transacting in, e.g. USD, NGN, EUR."
-        )
-        dest_currency = st.text_input(
-            "Destination Currency", value="USD",
-            help="Currency the recipient will receive, e.g. USD, NGN, EUR."
-        )
-        channel = st.text_input(
-            "Channel", value="mobile",
-            help="Platform used to initiate the transaction, e.g. mobile, web, atm."
-        )
-        home_country = st.text_input(
-            "Home Country", value="US",
-            help="Country the sender's account is registered in."
-        )
-        kyc_tier = st.text_input(
-            "KYC Tier", value="tier_1",
-            help="Know Your Customer verification level of the sender's account."
-        )
-        account_age_days = st.number_input(
-            "Account Age (days)", min_value=0, value=180,
-            help="Number of days since the sender's account was created."
-        )
+    with tx:
+        st.subheader("Transaction")
+        st.number_input("Amount (USD)", min_value=0.01, step=10.0, key="amount_usd")
+        st.number_input("Fee (USD)", min_value=0.0, step=0.5, key="fee")
+        st.selectbox("Source currency", SOURCE_CURRENCIES, key="source_currency")
+        st.selectbox("Destination currency", DEST_CURRENCIES, key="dest_currency")
+        st.selectbox("Channel", CHANNELS, key="channel", format_func=str.upper)
+        st.slider("Hour of day (UTC)", 0, 23, key="txn_hour")
 
-    with col2:
-        chargeback_history_count = st.number_input(
-            "Chargeback History Count", min_value=0, value=0,
-            help="Number of past chargebacks or disputes on this account."
-        )
-        new_device = st.checkbox(
-            "New Device",
-            help="Check if this transaction is from a device not previously used on this account."
-        )
-        location_mismatch = st.checkbox(
-            "Location Mismatch",
-            help="Check if the transaction location differs from the account's usual location."
-        )
-        ip_risk_score = st.slider(
-            "IP Risk Score", 0.0, 1.0, 0.1,
-            help="Risk score of the IP address used, from 0 (safe) to 1 (high risk)."
-        )
-        device_trust_score = st.slider(
-            "Device Trust Score", 0.0, 1.0, 0.8,
-            help="Trust score of the device used, from 0 (untrusted) to 1 (fully trusted)."
-        )
-        risk_score_internal = st.slider(
-            "Internal Risk Score", 0.0, 1.0, 0.2,
-            help="Internal risk score assigned by upstream fraud systems."
-        )
-        corridor_risk = st.slider(
-            "Corridor Risk", 0.0, 1.0, 0.1,
-            help="Risk score associated with this specific source-destination country pair."
-        )
-        txn_velocity_1h = st.number_input(
-            "Transactions (1h)", min_value=0, value=1,
-            help="Number of transactions made by this account in the last hour."
-        )
-        txn_velocity_24h = st.number_input(
-            "Transactions (24h)", min_value=0, value=3,
-            help="Number of transactions made by this account in the last 24 hours."
-        )
+    with acct:
+        st.subheader("Account")
+        st.selectbox("Home country", COUNTRIES, key="home_country")
+        st.selectbox("KYC tier", KYC_TIERS, key="kyc_tier", format_func=str.title,
+                     help="Know-Your-Customer verification level.")
+        st.number_input("Account age (days)", min_value=0, step=1, key="account_age_days")
+        st.number_input("Past chargebacks", min_value=0, step=1, key="chargeback_history_count")
 
-    submitted = st.form_submit_button("Check for Fraud")
+    with dev:
+        st.subheader("Device & network")
+        st.selectbox("IP country", COUNTRIES, key="ip_country")
+        st.toggle("New device", key="new_device")
+        st.toggle("Location mismatch", key="location_mismatch")
+        st.slider("IP risk score", 0.0, 1.0, step=0.01, key="ip_risk_score",
+                  help="0 = clean IP, 1 = known-bad IP.")
+        st.slider("Device trust score", 0.0, 1.0, step=0.01, key="device_trust_score",
+                  help="0 = untrusted, 1 = fully trusted device.")
+
+    with risk:
+        st.subheader("Risk & velocity")
+        st.slider("Internal risk score", 0.0, 1.0, step=0.01, key="risk_score_internal")
+        st.slider("Corridor risk", 0.0, 1.0, step=0.01, key="corridor_risk",
+                  help="Risk of this source → destination corridor.")
+        st.number_input("Transactions in last 1h", min_value=0, step=1, key="txn_velocity_1h")
+        st.number_input("Transactions in last 24h", min_value=0, step=1, key="txn_velocity_24h")
+
+    submitted = st.form_submit_button("Check transaction", type="primary", use_container_width=True)
 
 if submitted:
+    ss = st.session_state
+    when = datetime.combine(datetime.now(timezone.utc).date(), time(ss.txn_hour), tzinfo=timezone.utc)
     payload = {
-        "amount_usd": amount_usd,
-        "fee": fee,
-        "source_currency": source_currency,
-        "dest_currency": dest_currency,
-        "channel": channel,
-        "home_country": home_country,
-        "kyc_tier": kyc_tier,
-        "account_age_days": account_age_days,
-        "chargeback_history_count": chargeback_history_count,
-        "new_device": new_device,
-        "location_mismatch": location_mismatch,
-        "ip_risk_score": ip_risk_score,
-        "device_trust_score": device_trust_score,
-        "risk_score_internal": risk_score_internal,
-        "corridor_risk": corridor_risk,
-        "txn_velocity_1h": txn_velocity_1h,
-        "txn_velocity_24h": txn_velocity_24h
-    }
+        k: ss[k] for k in PRESETS["Typical customer"] if k != "txn_hour"
+    } | {"timestamp": when.isoformat()}
+
+    if payload["txn_velocity_24h"] < payload["txn_velocity_1h"]:
+        st.warning("Transactions in the last 24h can't be fewer than in the last hour.")
+        st.stop()
 
     try:
-        response = requests.post(API_URL, json=payload, timeout=10)
+        with st.spinner("Scoring..."):
+            response = requests.post(f"{api_base}/predict", json=payload, timeout=15)
+        if response.status_code == 422:
+            st.error("The API rejected the input:")
+            st.json(response.json().get("detail"))
+            st.stop()
         response.raise_for_status()
         result = response.json()
-
-        st.divider()
-        proba = result["fraud_probability"]
-
-        if result["prediction"] == 1:
-            st.error(f"Fraud detected. Probability: {proba:.2%}")
-        else:
-            st.success(f"Transaction looks legitimate. Fraud probability: {proba:.2%}")
-
-        st.progress(min(proba, 1.0))
-    except requests.exceptions.RequestException as e:
+    except requests.RequestException as e:
         st.error(f"Could not reach the API: {e}")
+        st.stop()
+
+    proba, threshold = result["fraud_probability"], result["threshold"]
+    level = result.get("risk_level", "high" if result["prediction"] else "low")
+
+    st.divider()
+    left, right = st.columns([1, 1])
+    with left:
+        st.plotly_chart(gauge(proba, threshold), use_container_width=True)
+    with right:
+        verdict = {
+            "high": ("🚨 Flag for review", st.error),
+            "medium": ("⚠️ Elevated risk, monitor", st.warning),
+            "low": ("✅ Looks legitimate", st.success),
+        }[level]
+        verdict[1](f"**{verdict[0]}** — fraud probability {proba:.1%} (alert threshold {threshold:.1%})")
+        base = (info or {}).get("test", {}).get("base_rate")
+        if base:
+            st.metric("Risk vs. an average transaction", f"{proba / base:.1f}×",
+                      help=f"Average fraud rate in the test period: {base:.2%}")
+
+        signals = input_signals(payload)
+        st.markdown("**Red flags in this input**")
+        if signals:
+            st.markdown("\n".join(f"- {s}" for s in signals))
+        else:
+            st.caption("None of the common red flags are present.")
+        st.caption("Red flags are simple rules on your inputs, shown for context. "
+                   "The score itself comes from the model.")
+
+if info and "error" not in info:
+    with st.expander("How the candidate models compared"):
+        names = list(info["models"])
+        values = [info["models"][m]["pr_auc"] for m in names]
+        fig = go.Figure(go.Bar(
+            x=names, y=values, text=[f"{v:.3f}" for v in values], textposition="outside",
+            marker_color=["#16a34a" if m == info["best_model"] else "#94a3b8" for m in names],
+        ))
+        base = info.get("test", {}).get("base_rate")
+        if base:
+            fig.add_hline(y=base, line_dash="dot", annotation_text="random guess (base rate)")
+        fig.update_layout(yaxis_title="Validation PR-AUC", height=300, showlegend=False,
+                          margin=dict(t=30, b=20, l=20, r=20))
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Models are compared on a validation period. The selected model is then "
+                   "scored once on a later, untouched test period.")
