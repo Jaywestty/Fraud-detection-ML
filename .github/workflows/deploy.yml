@@ -31,12 +31,25 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
+          python-version: "3.11"
+
+      # The hf CLI is pinned: huggingface/hub-sync@v0.1.0 installed the latest
+      # CLI and broke when `hf repo` was renamed to `hf repos`. The Space
+      # already exists, so only the upload (a mirror of the repo) is needed.
+      - name: Install Hugging Face CLI
+        run: pip install "huggingface_hub[cli]==2.4.0"
 
       - name: Sync to HuggingFace Space
-        uses: huggingface/hub-sync@v0.1.0
-        with:
-          github_repo_id: ${{ github.repository }}
-          huggingface_repo_id: Jayywestty/FraudDetection-ML
-          hf_token: ${{ secrets.HF_TOKEN }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          hf upload Jayywestty/FraudDetection-ML . . \
+            --repo-type space \
+            --exclude ".git*" \
+            --exclude ".github*" \
+            --delete "*" \
+            --commit-message "Sync from GitHub ${GITHUB_SHA::7}"
