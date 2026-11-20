@@ -1,35 +1,39 @@
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from imblearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
-from imblearn.over_sampling import SMOTE
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-NUM_COLS = [
-    "amount_usd","fee","exchange_rate_src_to_dest","ip_risk_score",
-    "account_age_days","device_trust_score","chargeback_history_count",
-    "risk_score_internal","txn_velocity_1h","txn_velocity_24h","corridor_risk"
-]
+from src.features import BINARY_FEATURES, CAT_FEATURES, NUM_FEATURES, FraudFeatures
 
-CAT_COLS = [
-    "home_country","source_currency","dest_currency","channel",
-    "kyc_tier","new_device","location_mismatch","cross_border","device_risk"
-]
 
-def build_pipeline(X_train, classifier):
+def build_preprocessor() -> ColumnTransformer:
     num_pipe = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler())
+        ("imputer", SimpleImputer(strategy="median", add_indicator=True)),
+        ("scaler", StandardScaler()),
+    ])
+    bin_pipe = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
     ])
     cat_pipe = Pipeline([
-        ("imputer", SimpleImputer(strategy="most_frequent")),
-        ("encoder", OneHotEncoder(handle_unknown="ignore"))
+        ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore", min_frequency=10)),
     ])
-    preprocessor = ColumnTransformer([
-        ("num", num_pipe, [c for c in NUM_COLS if c in X_train.columns]),
-        ("cat", cat_pipe, [c for c in CAT_COLS if c in X_train.columns])
-    ])
+    # remainder="drop" is explicit on purpose: every column the model uses must
+    # be listed in src/features.py, and tests assert the lists are complete.
+    return ColumnTransformer(
+        [
+            ("num", num_pipe, NUM_FEATURES),
+            ("bin", bin_pipe, BINARY_FEATURES),
+            ("cat", cat_pipe, CAT_FEATURES),
+        ],
+        remainder="drop",
+    )
+
+
+def build_pipeline(classifier) -> Pipeline:
+    """Raw transaction rows in -> fraud probability out."""
     return Pipeline([
-        ("preprocessor", preprocessor),
-        ("smote", SMOTE(random_state=42, sampling_strategy=0.3)),
-        ("classifier", classifier)
+        ("features", FraudFeatures()),
+        ("preprocessor", build_preprocessor()),
+        ("classifier", classifier),
     ])
